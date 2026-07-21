@@ -1,0 +1,8 @@
+customtkinter
+Pillow
+numpy
+
+# Optionnel : activer pour upscaling IA réel (GPU recommandé)
+# torch
+# basicsr
+# realesrgan
