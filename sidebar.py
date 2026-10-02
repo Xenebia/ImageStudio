@@ -1,18 +1,23 @@
 """
 sidebar.py
 ----------
+
 Barre latérale à onglets : Agrandir / Pixeliser / Style.
+
 Chaque onglet expose ses propres contrôles ; les callbacks remontent
 vers l'app principale via les fonctions passées au constructeur.
 """
 
 import customtkinter as ctk
+
 from filters import FILTER_NAMES
 
 
 class Sidebar(ctk.CTkFrame):
-
     TABS = ["Agrandir", "Pixeliser", "Style"]
+
+    PIXEL_MAX = 95
+    PIXEL_PRESETS = [("Léger", 10), ("Moyen", 30), ("Fort", 60), ("Max", 95)]
 
     def __init__(
         self,
@@ -33,6 +38,9 @@ class Sidebar(ctk.CTkFrame):
         self._on_filter_change = on_filter_change
         self._on_reset = on_reset
 
+        # Modifiable depuis les préférences (rendu en direct du slider)
+        self.live_preview = True
+
         self._active_tab = self.TABS[0]
 
         self._build_header()
@@ -41,6 +49,7 @@ class Sidebar(ctk.CTkFrame):
         self._show_tab(self.TABS[0])
 
     # ──────────────────────────────────────────
+
     def _build_header(self):
         ctk.CTkLabel(
             self, text="OUTILS", font=("Arial", 16, "bold")
@@ -81,7 +90,7 @@ class Sidebar(ctk.CTkFrame):
         # ── Bouton reset, toujours visible en bas ──
         ctk.CTkButton(
             self,
-            text="↺  Réinitialiser",
+            text="↺ Réinitialiser",
             command=self._on_reset,
             fg_color="transparent",
             border_width=1,
@@ -100,6 +109,7 @@ class Sidebar(ctk.CTkFrame):
     # ──────────────────────────────────────────
     # Onglet : Agrandir (upscale)
     # ──────────────────────────────────────────
+
     def _build_upscale_panel(self, master):
         panel = ctk.CTkFrame(master, fg_color="transparent")
         panel.grid_columnconfigure(0, weight=1)
@@ -119,6 +129,7 @@ class Sidebar(ctk.CTkFrame):
         self.scale_var = ctk.StringVar(value="2")
         scale_frame = ctk.CTkFrame(panel, fg_color="transparent")
         scale_frame.grid(row=2, column=0, sticky="ew", pady=(6, 16))
+
         for i, val in enumerate(["2", "4"]):
             ctk.CTkRadioButton(
                 scale_frame, text=f"×{val}", variable=self.scale_var, value=val
@@ -126,7 +137,7 @@ class Sidebar(ctk.CTkFrame):
 
         self.upscale_btn = ctk.CTkButton(
             panel,
-            text="✨  Lancer l'amélioration",
+            text="✨ Lancer l'amélioration",
             command=lambda: self._on_upscale(int(self.scale_var.get())),
             fg_color="#1f6aa5",
             hover_color="#144f7a"
@@ -143,6 +154,7 @@ class Sidebar(ctk.CTkFrame):
     # ──────────────────────────────────────────
     # Onglet : Pixeliser
     # ──────────────────────────────────────────
+
     def _build_pixelate_panel(self, master):
         panel = ctk.CTkFrame(master, fg_color="transparent")
         panel.grid_columnconfigure(0, weight=1)
@@ -155,29 +167,87 @@ class Sidebar(ctk.CTkFrame):
             justify="left"
         ).grid(row=0, column=0, sticky="w", pady=(8, 16))
 
-        self._pixel_value_label = ctk.CTkLabel(panel, text="Intensité : 0", font=("Arial", 12))
-        self._pixel_value_label.grid(row=1, column=0, sticky="w")
+        ctk.CTkLabel(
+            panel, text=f"Intensité (0 – {self.PIXEL_MAX})", font=("Arial", 12)
+        ).grid(row=1, column=0, sticky="w")
+
+        # [ − ] [ valeur ] [ + ]
+        stepper = ctk.CTkFrame(panel, fg_color="transparent")
+        stepper.grid(row=2, column=0, sticky="w", pady=(6, 0))
+
+        ctk.CTkButton(
+            stepper, text="−", width=32, command=lambda: self._step_pixel(-1)
+        ).grid(row=0, column=0)
+        self.pixel_entry = ctk.CTkEntry(stepper, width=60, justify="center")
+        self.pixel_entry.grid(row=0, column=1, padx=6)
+        ctk.CTkButton(
+            stepper, text="+", width=32, command=lambda: self._step_pixel(1)
+        ).grid(row=0, column=2)
+
+        self.pixel_entry.bind("<Return>", self._commit_pixel_entry)
+        self.pixel_entry.bind("<FocusOut>", self._commit_pixel_entry)
 
         self.pixel_slider = ctk.CTkSlider(
             panel,
             from_=0,
-            to=95,
-            number_of_steps=95,
+            to=self.PIXEL_MAX,
+            number_of_steps=self.PIXEL_MAX,
             command=self._on_pixel_slider
         )
-        self.pixel_slider.set(0)
-        self.pixel_slider.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.pixel_slider.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        # Si le rendu en direct est désactivé, on applique au relâchement
+        self.pixel_slider.bind("<ButtonRelease-1>", self._on_pixel_release)
 
+        presets = ctk.CTkFrame(panel, fg_color="transparent")
+        presets.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        presets.grid_columnconfigure(tuple(range(len(self.PIXEL_PRESETS))), weight=1)
+        for i, (name, val) in enumerate(self.PIXEL_PRESETS):
+            ctk.CTkButton(
+                presets,
+                text=name,
+                width=0,
+                fg_color="transparent",
+                border_width=1,
+                command=lambda v=val: self._set_pixel(v)
+            ).grid(row=0, column=i, sticky="ew", padx=2)
+
+        self._set_pixel(0, notify=False)
         return panel
+
+    def _set_pixel(self, value, notify=True):
+        value = max(0, min(self.PIXEL_MAX, int(value)))
+        self.pixel_slider.set(value)
+        self.pixel_entry.delete(0, "end")
+        self.pixel_entry.insert(0, str(value))
+        if notify:
+            self._on_pixelate_change(value)
+
+    def _step_pixel(self, delta):
+        self._set_pixel(int(self.pixel_slider.get()) + delta)
+
+    def _commit_pixel_entry(self, _event=None):
+        try:
+            value = int(self.pixel_entry.get())
+        except ValueError:
+            value = int(self.pixel_slider.get())  # saisie invalide : on garde l'ancienne
+        if value != int(self.pixel_slider.get()) or self.pixel_entry.get() != str(value):
+            self._set_pixel(value)
 
     def _on_pixel_slider(self, value):
         value = int(value)
-        self._pixel_value_label.configure(text=f"Intensité : {value}")
-        self._on_pixelate_change(value)
+        self.pixel_entry.delete(0, "end")
+        self.pixel_entry.insert(0, str(value))
+        if self.live_preview:
+            self._on_pixelate_change(value)
+
+    def _on_pixel_release(self, _event=None):
+        if not self.live_preview:
+            self._on_pixelate_change(int(self.pixel_slider.get()))
 
     # ──────────────────────────────────────────
     # Onglet : Style (filtres rétro)
     # ──────────────────────────────────────────
+
     def _build_style_panel(self, master):
         panel = ctk.CTkFrame(master, fg_color="transparent")
         panel.grid_columnconfigure(0, weight=1)
@@ -204,13 +274,13 @@ class Sidebar(ctk.CTkFrame):
         return panel
 
     # ──────────────────────────────────────────
+
     def set_backend_label(self, text: str):
         self.backend_label.configure(text=f"Backend : {text}")
 
     def set_upscale_enabled(self, enabled: bool):
         self.upscale_btn.configure(state="normal" if enabled else "disabled")
 
-    def reset_controls(self):
-        self.pixel_slider.set(0)
-        self._pixel_value_label.configure(text="Intensité : 0")
+    def reset_controls(self, pixel_value=0):
+        self._set_pixel(pixel_value, notify=False)
         self.filter_var.set(FILTER_NAMES[0])

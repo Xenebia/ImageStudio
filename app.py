@@ -22,6 +22,9 @@ from sidebar import Sidebar
 from filters import pixelate, apply_filter
 from upscaler import upscale_image_obj, get_backend_name
 
+from settings import Settings
+from preferences import PreferencesWindow
+
 MAX_HISTORY = 20
 MAX_RECENT  = 8
 ZOOM_STEPS  = [0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
@@ -40,6 +43,9 @@ def _base_dir() -> Path:
 class App(ctk.CTk):
 
     def __init__(self):
+        self.settings = Settings()
+        ctk.set_appearance_mode(self.settings.get("appearance"))
+        
         super().__init__()
 
         self.title("Image Studio — Upscale & Style")
@@ -72,16 +78,13 @@ class App(ctk.CTk):
         self._build_layout()
         self._build_menu()
         self.sidebar.set_backend_label(get_backend_name())
+        self.sidebar.live_preview = bool(self.settings.get("live_preview"))
 
         # ── Icône de la fenêtre ─────────────────────────────────
         # Fonctionne en développement ET dans l'exe PyInstaller.
         # Pour changer l'icône : remplace assets/icon.ico
-        icon_path = _base_dir() / "assets" / "icon.ico"
-        if icon_path.exists():
-            try:
-                self.iconbitmap(str(icon_path))
-            except Exception:
-                pass   # Certaines versions Linux ne supportent pas .ico
+        self._icon_path = _base_dir() / "assets" / "icon.ico"
+        self._apply_icon()
 
     # ═══════════════════════════════════════════════════════════
     # Layout
@@ -179,6 +182,26 @@ class App(ctk.CTk):
             on_doc=lambda: webbrowser.open("https://github.com/xinntao/Real-ESRGAN"),
             on_update=lambda: self._set_status("Vérification des mises à jour… (non implémenté)"),
         )
+    
+    def _apply_icon(self):
+        if not self._icon_path.exists():
+            return
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                # Pour que la barre des tâches utilise ton icône et non celle de Python
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Xenebia.ImageStudio")
+            except Exception:
+                pass
+
+        def _set():
+            try:
+                self.iconbitmap(str(self._icon_path))
+            except Exception:
+                pass
+
+        _set()
+        self.after(250, _set)  # CTk réécrase l'icône vers 200 ms
 
     # ═══════════════════════════════════════════════════════════
     # Fichiers
@@ -203,12 +226,12 @@ class App(ctk.CTk):
         self.current_path   = path
         self.original_image = img
         self.working_image  = img.copy()
-        self.pixel_amount   = 0
+        self.pixel_amount = self.settings.get("default_pixel")
         self.current_filter = "Aucun"
 
         self._undo_stack.clear()
         self._redo_stack.clear()
-        self.sidebar.reset_controls()
+        self.sidebar.reset_controls(self.pixel_amount)
         self._add_recent(path)
         self._render()
         self.save_btn.configure(state="normal")
@@ -261,7 +284,7 @@ class App(ctk.CTk):
         try:
             ext = Path(path).suffix.lower()
             if ext in (".jpg", ".jpeg"):
-                self.modified_image.save(path, "JPEG", quality=95, subsampling=0)
+                self.modified_image.save(path, "JPEG", quality=self.settings.get("jpeg_quality"), subsampling=0)
             else:
                 self.modified_image.save(path)
             self._set_status(f"✅ Exporté : {Path(path).name}")
@@ -339,9 +362,9 @@ class App(ctk.CTk):
             return
         self._push_history()
         self.working_image  = self.original_image.copy()
-        self.pixel_amount   = 0
+        self.pixel_amount = self.settings.get("default_pixel")
         self.current_filter = "Aucun"
-        self.sidebar.reset_controls()
+        self.sidebar.reset_controls(self.pixel_amount)
         self._render()
         self._set_status("Image réinitialisée.")
 
@@ -471,7 +494,20 @@ class App(ctk.CTk):
         self.status_label.configure(text=text)
 
     def _show_preferences(self):
-        messagebox.showinfo("Préférences", "Panneau de préférences — à implémenter.")
+        if getattr(self, "_prefs_win", None) is not None and self._prefs_win.winfo_exists():
+            self._prefs_win.focus()
+            return
+        self._prefs_win = PreferencesWindow(
+            self, self.settings, self._icon_path, self._apply_settings
+        )
+
+    def _apply_settings(self):
+        ctk.set_appearance_mode(self.settings.get("appearance"))
+        n = int(self.settings.get("max_history"))
+        self._undo_stack = deque(self._undo_stack, maxlen=n)
+        self._redo_stack = deque(self._redo_stack, maxlen=n)
+        self.sidebar.live_preview = bool(self.settings.get("live_preview"))
+        self._set_status("Préférences enregistrées.")
 
     def _show_about(self):
         messagebox.showinfo(
